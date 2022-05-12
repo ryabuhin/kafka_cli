@@ -72,7 +72,7 @@ Modify `${HOME}/.bashrc` file as follows:
 echo 'export KAFKA_VER_DIR="/usr/local/opt/kafka"' >> ${HOME}/.bashrc
 echo 'export KAFKA_HOME="${KAFKA_VER_DIR}/current"' >> "${HOME}/.bashrc"
 echo 'export PATH="$PATH:$KAFKA_HOME/bin"' >> "${HOME}/.bashrc"
-echo "switchto-kafka310=\"rm -rf $KAFKA_HOME && ln -s ${KAFKA_VER_DIR}/3.1.0 $KAFKA_HOME && echo '> Kafka v3.1.0 is active.'
+echo "alias switchto-kafka310=\"rm -rf $KAFKA_HOME && ln -s ${KAFKA_VER_DIR}/3.1.0 $KAFKA_HOME && echo '> Kafka v3.1.0 is active.'\""
 ``` 
 
 Download `kfk` CLI using git, store it `${HOME}/.kafka_cli` directory and create `KFK_CLI_HOME` environment variable.
@@ -80,6 +80,7 @@ Download `kfk` CLI using git, store it `${HOME}/.kafka_cli` directory and create
 ```
 git clone https://github.com/ryabuhin/kafka_cli.git ${HOME}/.kafka_cli
 echo 'export KFK_CLI_HOME="${HOME}/.kafka_cli"' >> ${HOME}/.bashrc
+ln -s "${HOME}/.kafka_cli/kfk" /usr/local/bin/kfk
 ```
 
 ## Dependencies
