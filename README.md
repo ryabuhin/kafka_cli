@@ -121,4 +121,4 @@ key.serializer=org.apache.kafka.common.serialization.StringSerializer
 value.serializer=io.confluent.kafka.serializers.KafkaAvroSerializer
 ```
 
-Find more examples of actual properties files for local-development purposes here: **${KFK_CLI_HOME}/etc/env/local-.*_config.properties**.
+Find more examples of actual properties files for local-development purposes here: `${KFK_CLI_HOME}/etc/env/local-.*_config.properties`
