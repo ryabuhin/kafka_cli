@@ -43,11 +43,11 @@ EOF
 [ "${1}" = 'help' ] && usage
 
 echo "List of active local kafka-environments:"
-kafka_envs=$(docker ps -a -f "name=kfk-.+_kafka" | grep -E -o 'kfk-.*' | cut -d- -f2- | awk -F'_kafka_' '{print $1}' | sort | uniq)
+kafka_envs=$(docker ps -a -f "name=kfk-.+[_-]kafka" | grep -E -o 'kfk-.*' | sed -e 's/kfk-//g' -e 's/[_-]kafka[-_]1//g' | sort | uniq)
 if [ ! -z "${kafka_envs}" ]; then 
     for kenv in ${kafka_envs}; do
-        k_port=$(docker ps -a -f "name=kfk-${kenv}_kafka" | grep -E -o '[0-9]+->[0-9]+/tcp' | awk -F'[-]' '{print $1}')
-        sr_port=$(docker ps -a -f "name=kfk-${kenv}_sregistry" | grep -E -o '[0-9]+->[0-9]+/tcp' | awk -F'[-]' '{print $1}')
+        k_port=$(docker ps -a -f "name=kfk-${kenv}[_-]kafka" | grep -E -o '[0-9]+->[0-9]+/tcp' | awk -F'[-]' '{print $1}' | uniq)
+        sr_port=$(docker ps -a -f "name=kfk-${kenv}[_-]sregistry" | grep -E -o '[0-9]+->[0-9]+/tcp' | awk -F'[-]' '{print $1}' | uniq)
         printf "${GRE}$(echo $kenv | awk '{print toupper($0)}')${NCO} (kafka port: ${k_port} / schema-registry port: ${sr_port})\n"
     done
 else 
