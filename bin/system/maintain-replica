@@ -1,0 +1,136 @@
+#!/bin/bash
+#
+# Replicate content of topics between environments.
+# It uses apache kafka mirror maker v1.
+#
+# Required Arguments:
+#   'source'              : source environment FROM which replicate topics content.
+#   'target'              : target envirnment TO which replicate topics content.
+#   'topics_whitelist'    : regex to define list of topics to replicate.
+#
+# All configuration files must be stored in '${KFK_CLI_HOME}/etc/env' directory.
+# All configuration files must follow the following pattern name: <cluster-name>_config.properties
+# Configuration files for kfk-replication consumer/producers stores in '${KFK_CLI_HOME}/etc/replication' directory.
+# Open '${KFK_CLI_HOME}/etc/system/[consumer/producer].properties' files to make changes manually.
+# ---
+# author: valentine-riabukhin.pro
+
+sed_specific_extension_flag=$([ $(command -v sw_vers) ] && echo "-i ''" || unset sed_specific_extension_flag)
+
+KFK_CLI_ETC_REPLICATION="${KFK_CLI_HOME}/etc/replication"
+TMP_REPLICATION_DIR='/tmp/kfk/replication'
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+
+active_logger="${KFK_CLI_HOME}/etc/logging/active-log4j.properties"
+[ -f "${active_logger}" ] && export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:${active_logger}" || unset KAFKA_LOG4J_OPTS
+
+KAFKA_RUN_CLASS_BIN=$(compgen -ac | grep kafka-run-class | head -n 1)
+
+GRE='\e[0;32m'      # green
+RED='\e[0;31m'      # red
+YEL="\033[1;33m"    # yellow
+NCO="\033[0m"       # no color
+
+echoc() {
+    local color=$1
+    local message=$2
+    local color_prefix=''
+    [ "${color}" = "RED" ] && color_prefix="${RED}[-]${NCO}"
+    [ "${color}" = "GRE" ] && color_prefix="${GRE}[+]${NCO}"
+    [ "${color}" = "YEL" ] && color_prefix="${YEL}[?]${NCO}"
+    printf "${color_prefix} ${message}\n"
+}
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk system maintain-replica [<parameters>]
+Description:
+    Replicate content of topics between environments.
+    It uses apache kafka mirror maker v1. 
+    
+    Configuration file for SSH tunnels stores in '${KFK_CLI_HOME}/etc/tunnel' directory.
+    Open '\${KFK_CLI_HOME}/etc/tunnel/tunnel.properties' file to make changes manually.
+    Configuration files for kfk-replication consumer/producers stores in '${KFK_CLI_HOME}/etc/replication' directory.
+    Open '${KFK_CLI_HOME}/etc/system/[consumer/producer].properties' files to make changes manually.
+    
+    Required Arguments:
+      'source'              : source environment FROM which replicate topics content.
+      'target'              : target envirnment TO which replicate topics content.
+      'topics_whitelist'    : regex to define list of topics to replicate.
+Examples:
+    kfk system maintain-replica local-dev local 'topic-to-replicate-.*'
+EOF
+    exit $exit_status
+}
+
+SOURCE_ENVIRONMENT="$1"
+TARGET_ENVIRONMENT="$2"
+TOPICS_WHITELIST="$3"
+
+if [ "${1}" = 'help' ]; then usage
+elif [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then 
+    [ -z "${SOURCE_ENVIRONMENT}" ] && echoc "RED" "'source' is required argument."
+    [ -z "${TARGET_ENVIRONMENT}" ] && echoc "RED" "'target' is required argument."
+    [ -z "${TOPICS_WHITELIST}" ] && echoc "RED" "'topics_whitelist' is required argument."
+    usage ${INVALID_ARGUMENTS_ERROR_CODE}; 
+fi
+
+SOURCE_ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${SOURCE_ENVIRONMENT}_config.properties"
+TARGET_ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${TARGET_ENVIRONMENT}_config.properties"
+
+if ! [ -f "${SOURCE_ENV_PROPS_LOCATION}" ]; then 
+    cat <<EOF 
+The configuration file for '${SOURCE_ENVIRONMENT}' environment could not be found. Make sure it exists.
+
+Help:
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+Type 'kfk system help maintain-replica' to read more about 'maintain-replica' command.
+EOF
+    exit ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+if ! [ -f "${TARGET_ENV_PROPS_LOCATION}" ]; then 
+    cat <<EOF 
+The configuration file for '${TARGET_ENVIRONMENT}' environment could not be found. Make sure it exists.
+
+Help:
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+Type 'kfk system help maintain-replica' to read more about 'maintain-replica' command.
+EOF
+    exit ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+prepare_properties () {
+    BASE_PROPERTIES_FILE_LOCATION="$1"
+    SPECIFIC_ENV_PROPERTIES_FILE_LOCATION="$2"
+    RESOLVED_PROPERTIES_FILE_LOCATION="${TMP_REPLICATION_DIR}/$(basename ${BASE_PROPERTIES_FILE_LOCATION})"
+    cp "$BASE_PROPERTIES_FILE_LOCATION" "$RESOLVED_PROPERTIES_FILE_LOCATION"
+    while IFS= read -r config || [ -n "$config" ]; do
+        [ -z "$config" ] || [[ "$config" == '#'* ]] || [[ "$config" == 'key.serializer='* ]] || [[ "$config" == 'value.serializer='* ]] \
+            || [[ "$config" == 'key.deserializer='* ]] || [[ "$config" == 'value.deserializer='* ]] && continue
+        config_name=$(grep -E -o '^[a-zA-Z0-9\.]+=' <<< $config)
+        property_to_replace=$(grep -n -E "^${config_name}" "$RESOLVED_PROPERTIES_FILE_LOCATION")
+        if [ -z "$property_to_replace" ]; then echo -e "\n${config}" >> "$RESOLVED_PROPERTIES_FILE_LOCATION"
+        else
+            line_number=$(grep -E -o '^[0-9]*' <<< $property_to_replace)
+            sed -i '' "${line_number}s/.*/${config}/" "$RESOLVED_PROPERTIES_FILE_LOCATION"
+        fi
+    done < "$SPECIFIC_ENV_PROPERTIES_FILE_LOCATION"
+}
+
+[ ! -d "${TMP_REPLICATION_DIR}" ] && mkdir -p "${TMP_REPLICATION_DIR}"
+prepare_properties "${KFK_CLI_ETC_REPLICATION}/consumer.properties" "$SOURCE_ENV_PROPS_LOCATION"
+prepare_properties "${KFK_CLI_ETC_REPLICATION}/producer.properties" "$TARGET_ENV_PROPS_LOCATION"
+
+${KAFKA_RUN_CLASS_BIN} kafka.tools.MirrorMaker \
+    --consumer.config "${TMP_REPLICATION_DIR}/consumer.properties" \
+    --producer.config "${TMP_REPLICATION_DIR}/producer.properties" \
+    --whitelist "$TOPICS_WHITELIST" \
+    --num.streams 1

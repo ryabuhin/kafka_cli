@@ -1,0 +1,80 @@
+#!/bin/bash
+#
+# Show lags for all consumer groups on the specified kafka cluster.
+# All metadata fields will be displayed in the next format: GROUP|TOPIC|PARTITION|LAG. 
+# If a consumer group has no active members, then lag will be displayed as '-' symbol instead of integer value.
+#
+# Required Arguments:
+#   'environment'         : environment name of the specified kafka cluster.
+#
+# All configuration files must be stored in '${KFK_CLI_HOME}/etc/env' directory.
+# All configuration files must follow the following pattern name: <cluster-name>_config.properties
+# ---
+# author: valentine-riabukhin.pro
+
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+
+active_logger="${KFK_CLI_HOME}/etc/logging/active-log4j.properties"
+[ -f "${active_logger}" ] && export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:${active_logger}" || unset KAFKA_LOG4J_OPTS
+
+KAFKA_CONSUMER_GROUPS_BIN=$(compgen -ac | grep kafka-consumer-groups | head -n 1)
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk cgroups show-lags [<parameters>]
+Description:
+    Show lags for all consumer groups on the specified kafka cluster.
+    All metadata fields will be displayed in the next format: GROUP|TOPIC|PARTITION|LAG.
+    If a consumer group has no active members, then lag will be displayed as '-' symbol instead of integer value.
+    
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+    
+    Required Arguments:
+      'environment'         : environment name of the specified kafka cluster.
+Examples:
+    kfk cgroups show-lags dev dev-cgroup
+    kfk cgroups show-lags local-dev dev-cgroup
+EOF
+    exit $exit_status
+}
+
+if [ "${1}" = 'help' ]; then usage
+elif [ -z "$1" ]; then usage ${INVALID_ARGUMENTS_ERROR_CODE}; fi
+
+ENVIRONMENT="$1"
+ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${ENVIRONMENT}_config.properties"
+
+if ! [ -f "${ENV_PROPS_LOCATION}" ]; then 
+    cat <<EOF 
+The configuration file for '${ENVIRONMENT}' environment could not be found. Make sure it exists.
+
+Help:
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+Type 'kfk cgroups help show-lags' to read more about 'show-lags' command.
+EOF
+    exit ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+KAFKA_CONSUMER_GROUPS_COMMAND="${KAFKA_CONSUMER_GROUPS_BIN} \
+    --timeout 30000 \
+    --describe \
+    --all-groups \
+    --command-config ${ENV_PROPS_LOCATION}"
+
+IFS=$'\n'
+for FILE_PROPERTY in $(cat ${ENV_PROPS_LOCATION} | egrep ^[a-zA-Z0-9]); do 
+    if [ "$FILE_PROPERTY" != "${FILE_PROPERTY/bootstrap.servers//}" ]; then
+        IFS=$'='; SPLITTED_BOOTSTRAP_SERVER=($FILE_PROPERTY); IFS=$'\n'
+        BOOTSTRAP_SERVER="${SPLITTED_BOOTSTRAP_SERVER[1]}"
+        KAFKA_CONSUMER_GROUPS_COMMAND="$KAFKA_CONSUMER_GROUPS_COMMAND --bootstrap-server $BOOTSTRAP_SERVER"
+    fi
+done
+
+eval $KAFKA_CONSUMER_GROUPS_COMMAND 2>&1 | awk '{print $1"|"$2"|"$3"|"$6}' \
+    | egrep -v '^((GROUP|TOPIC|PARTITION|LAG)|(\|\|\|)|(Consumer([ |]))|(\[[0-9]{4}-[0-9]{2}-[0-9]{2}\|))' | sort

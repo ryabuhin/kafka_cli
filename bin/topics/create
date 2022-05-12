@@ -1,0 +1,91 @@
+#!/bin/bash
+#
+# Create new topic on the specified kafka cluster with provided parameters.
+#
+# Required Arguments:
+#   'environment'         : environment name of the specified kafka cluster.
+#   'topic'               : topic name to create.
+#   'partitions'          : amount of partitions.
+#   'replication-factor'  : amount of replicas.
+#   'cleanup-policy'      : 'delete' or 'compact' cleanup.policy to set. 
+#                           'delete' policy sets by default if no value is provided
+#
+# All configuration files must be stored in '${KFK_CLI_HOME}/etc/env' directory.
+# All configuration files must follow the following pattern name: <cluster-name>_config.properties
+# ---
+# author: valentine-riabukhin.pro
+
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+
+active_logger="${KFK_CLI_HOME}/etc/logging/active-log4j.properties"
+[ -f "${active_logger}" ] && export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:${active_logger}" || unset KAFKA_LOG4J_OPTS
+
+KAFKA_TOPICS_BIN=$(compgen -ac | grep kafka-topics | head -n 1)
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk topics create [<parameters>]
+Description:
+    Create topic on the specified kafka cluster with provided parameters.
+    
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+    
+    Required Arguments:
+      'environment'         : environment name of the specified kafka cluster.
+      'topic'               : topic name to create.
+      'partitions'          : amount of partitions.
+      'replication-factor'  : amount of replicas.
+      'cleanup-policy'      : 'delete' or 'compact' or both cleanup.policy to set. 
+                              'delete' policy sets by default if no value is provided
+Examples:
+    kfk topics create dev dev-compact-topic 6 3 'compact'
+    kfk topics create local-dev dev-delete-topic 6 3
+EOF
+    exit $exit_status
+}
+
+if [ "${1}" = 'help' ]; then usage
+elif [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ]; then usage ${INVALID_ARGUMENTS_ERROR_CODE}; fi
+
+ENVIRONMENT="$1"
+TOPIC_NAME="$2"
+PARTITIONS="$3"
+REPLICATION_FACTOR="$4"
+[ -z "$5" ] || [ $5 != 'compact' ] && CLEANUP_POLICY="delete" || CLEANUP_POLICY="$5"
+ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${ENVIRONMENT}_config.properties"
+
+if ! [ -f "${ENV_PROPS_LOCATION}" ]; then 
+    cat <<EOF 
+The configuration file for '${ENVIRONMENT}' environment could not be found. Make sure it exists.
+
+Help:
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+Type 'kfk topics help create' to read more about 'create' command.
+EOF
+    exit ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+KAFKA_TOPICS_COMMAND="${KAFKA_TOPICS_BIN} \
+    --topic ${TOPIC_NAME} \
+    --create \
+    --partitions ${PARTITIONS} \
+    --replication-factor ${REPLICATION_FACTOR} \
+    --command-config ${ENV_PROPS_LOCATION} \
+    --config cleanup.policy=${CLEANUP_POLICY}"
+
+IFS=$'\n'
+for FILE_PROPERTY in $(cat ${ENV_PROPS_LOCATION} | egrep ^[a-zA-Z0-9]); do 
+    if [ "$FILE_PROPERTY" != "${FILE_PROPERTY/bootstrap.servers//}" ]; then
+        IFS=$'='; SPLITTED_BOOTSTRAP_SERVER=($FILE_PROPERTY); IFS=$'\n'
+        BOOTSTRAP_SERVER="${SPLITTED_BOOTSTRAP_SERVER[1]}"
+        KAFKA_TOPICS_COMMAND="$KAFKA_TOPICS_COMMAND --bootstrap-server $BOOTSTRAP_SERVER"
+    fi
+done
+
+eval $KAFKA_TOPICS_COMMAND

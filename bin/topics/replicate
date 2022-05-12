@@ -1,0 +1,91 @@
+#!/bin/bash
+#
+# Replicate topics with configurations from SOURCE to TARGET environment.
+#
+# Required Arguments:
+#   'source'              : source environment FROM which replicate topics.
+#   'target'              : target envirnment TO which replicate topics.
+#
+# Optional Arguments:
+#   'partitions'          : override partitions count.
+#   'replicas'            : override replication factor.
+#
+# All configuration files must be stored in '${KFK_CLI_HOME}/etc/env' directory.
+# All configuration files must follow the following pattern name: <cluster-name>_config.properties
+# ---
+# author: valentine-riabukhin.pro
+
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+
+active_logger="${KFK_CLI_HOME}/etc/logging/active-log4j.properties"
+[ -f "${active_logger}" ] && export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:${active_logger}" || unset KAFKA_LOG4J_OPTS
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk topics replicate [<parameters>]
+Description:
+    Replicate topics with configuration between two environments.
+    
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+    
+    Required Arguments:
+      'source'              : source environment FROM which replicate topics.
+      'target'              : target environment TO which replicate topics.
+
+    Optional Arguments:
+      'partitions'          : override amount of partitions.
+      'replicas'            : override replication factor.
+Examples:
+    kfk topics replicate dev local
+EOF
+    exit $exit_status
+}
+
+if [ "${1}" = 'help' ]; then usage
+elif [ -z "$1" ] || [ -z "$2" ]; then usage ${INVALID_ARGUMENTS_ERROR_CODE}; fi
+
+SOURCE_ENVIRONMENT="$1"
+TARGET_ENVIRONMENT="$2"
+OVERRIDE_PARTITIONS="$3"
+OVERRIDE_REPLICAS="$4"
+ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${ENVIRONMENT}_config.properties"
+SOURCE_ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${SOURCE_ENVIRONMENT}_config.properties"
+TARGET_ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${TARGET_ENVIRONMENT}_config.properties"
+
+if ! [ -f "${SOURCE_ENV_PROPS_LOCATION}" ]; then 
+    cat <<EOF 
+The configuration file for '${SOURCE_ENVIRONMENT}' environment could not be found. Make sure it exists.
+
+Help:
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+Type 'kfk topics help replicate' to read more about 'replicate' command.
+EOF
+    exit ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+if ! [ -f "${TARGET_ENV_PROPS_LOCATION}" ]; then 
+    cat <<EOF 
+The configuration file for '${TARGET_ENVIRONMENT}' environment could not be found. Make sure it exists.
+
+Help:
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+Type 'kfk topics help replicate' to read more about 'replicate' command.
+EOF
+    exit ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+for topic in $(diff <(${SCRIPT_LOCATION}/list "$SOURCE_ENVIRONMENT") <(${SCRIPT_LOCATION}/list "$TARGET_ENVIRONMENT") | grep -E '<' | awk '{print $2}'); do
+    topic_expl=$(${SCRIPT_LOCATION}/describe "$SOURCE_ENVIRONMENT" "$topic")
+    [ -z "${OVERRIDE_PARTITIONS}" ] && partitions=$(echo "$topic_expl" | grep -E -o 'PartitionCount: [0-9]+' | awk -F '[: ]+' '{print $2}') || partitions=${OVERRIDE_PARTITIONS}
+    [ -z "${OVERRIDE_REPLICAS}" ] && replicas=$(echo "$topic_expl" | grep -E -o 'ReplicationFactor: [0-9]+' | awk -F '[: ]+' '{print $2}') || replicas=${OVERRIDE_REPLICAS}
+    cleanup_policy=$(${SCRIPT_LOCATION}/configs "${SOURCE_ENVIRONMENT}" "$topic" | grep 'cleanup.policy' | awk -F '=' '{print $2}' | awk '{print $1}')
+    ${SCRIPT_LOCATION}/create "$TARGET_ENVIRONMENT" "$topic" "$partitions" "$replicas" "$cleanup_policy"
+done

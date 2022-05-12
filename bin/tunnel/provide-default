@@ -1,0 +1,88 @@
+#!/bin/bash
+#
+# Set DEFAULT user@machine and key to open SSH tunnels.
+# This connection type is used when another configuration for specific environment is not defined.
+#
+# Required Arguments:
+#   'usr_machine'         : user and IP machine address to connect via SSH.
+#   'key_path'            : SSH key path.
+#
+# Configuration file for SSH tunnels stores in '${KFK_CLI_HOME}/etc/tunnel' directory.
+# Open '${KFK_CLI_HOME}/etc/tunnel/tunnel.properties' file to make changes manually.
+# ---
+# author: valentine-riabukhin.pro
+
+sed_specific_extension_flag=$([ $(command -v sw_vers) ] && echo "-i ''" || echo '')
+
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+
+GRE='\e[0;32m'      # green
+RED='\e[0;31m'      # red
+YEL="\033[1;33m"    # yellow
+NCO="\033[0m"       # no color
+
+echoc() {
+    local color=$1
+    local message=$2
+    local color_prefix=''
+    [ "${color}" = "RED" ] && color_prefix="${RED}[-]${NCO}"
+    [ "${color}" = "GRE" ] && color_prefix="${GRE}[+]${NCO}"
+    [ "${color}" = "YEL" ] && color_prefix="${YEL}[?]${NCO}"
+    printf "${color_prefix} ${message}\n"
+}
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk tunnel set-key [<parameters>]
+Description:
+    Set DEFAULT user@machine and key to open SSH tunnels.
+    This connection type is used when another configuration 
+    for specific environment is not defined.
+    
+    Configuration file for SSH tunnels stores in '${KFK_CLI_HOME}/etc/tunnel' directory.
+    Open '\${KFK_CLI_HOME}/etc/tunnel/tunnel.properties' file to make changes manually.
+    
+    Required Arguments:
+      'usr_machine'         : user and machine address as IP to connect via SSH.
+      'key_path'            : SSH key path.
+Examples:
+    kfk tunnel provide-env dev 'root@192.168.1.180' \${HOME}/.ssh/ssh_private_key
+EOF
+    exit $exit_status
+}
+
+USR_MACHINE="${1}"
+KEY_PATH="${2}"
+
+if [ "${1}" = 'help' ]; then usage
+elif [ -z "$1" ] || [ -z "$2" ]; then 
+    [ -z "${USR_MACHINE}" ] && echoc "RED" "'usr_machine' is required argument."
+    [ -z "${KEY_PATH}" ] && echoc "RED" "'key_path' is required argument."
+    usage ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+if [[ ${USR_MACHINE} =~ ^.+\@.+$ ]]; then
+    USR_MACHINE_USERNAME="$(echo ${USR_MACHINE} | awk -F '[@]' '{print $1}')"
+    USR_MACHINE_IP="$(echo ${USR_MACHINE} | awk -F '[@]' '{print $2}')"
+
+    if [[ ! ${USR_MACHINE_USERNAME} =~ ^[a-zA-Z0-9_-]+$ ]]; then 
+        echoc "RED" "'${USR_MACHINE_USERNAME}' is invalid username."
+        usage ${INVALID_ARGUMENTS_ERROR_CODE}
+    fi
+    if [[ ! ${USR_MACHINE_IP} =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then 
+        echoc "RED" "'${USR_MACHINE_IP}' is invalid IP address."
+        usage ${INVALID_ARGUMENTS_ERROR_CODE}
+    fi
+else echoc "RED" "'usr_machine' must contain username and IP separated by '@' symbol."
+fi
+
+[ ! -f "${KEY_PATH}" ] && echoc "RED" "SSH key file '${KEY_PATH}' does not exist." && usage ${INVALID_ARGUMENTS_ERROR_CODE}; 
+
+sed $sed_specific_extension_flag "/^default.key.path/d" "${KFK_CLI_HOME}/etc/tunnel/tunnel.properties"
+sed $sed_specific_extension_flag "/^default.ssh.connection/d" "${KFK_CLI_HOME}/etc/tunnel/tunnel.properties"
+echo "default.key.path=${KEY_PATH}" >> "${KFK_CLI_HOME}/etc/tunnel/tunnel.properties"
+echo "default.ssh.connection=${USR_MACHINE}" >> "${KFK_CLI_HOME}/etc/tunnel/tunnel.properties"
+echoc "GRE" "SSH key '${KEY_PATH}' and address '${USR_MACHINE}' are set as DEFAULT."

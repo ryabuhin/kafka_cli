@@ -1,0 +1,79 @@
+#!/bin/bash
+#
+# Describe kafka brokers configuration by BROKER_ID on the given environment using kafka-configs binary.
+#
+# Required Arguments:
+#   'environment'         : environment name of the specified kafka cluster.
+#   'broker_id'           : broker ID to describe specific broker configuration.
+#
+# All configuration files must be stored in '${KFK_CLI_HOME}/etc/env' directory.
+# All configuration files must follow the following pattern name: <cluster-name>_config.properties
+# ---
+# author: valentine-riabukhin.pro
+
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+
+active_logger="${KFK_CLI_HOME}/etc/logging/active-log4j.properties"
+[ -f "${active_logger}" ] && export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:${active_logger}" || unset KAFKA_LOG4J_OPTS
+
+KAFKA_CONFIGS_BIN=$(compgen -ac | grep kafka-configs | head -n 1)
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk brokers configs [<parameters>]
+Description:
+    Get detailed broker configuration on the specified kafka cluster by broker ID.
+    
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+    
+    Required Arguments:
+      'environment'         : environment name of the specified kafka cluster.
+      'broker_id'           : broker ID to describe specific broker configuration.
+Examples:
+    kfk brokers configs dev 0
+    kfk brokers configs local-dev 1
+EOF
+    exit $exit_status
+}
+
+if [ "${1}" = 'help' ]; then usage
+elif [ -z "$1" ] || [ -z "$2" ]; then usage ${INVALID_ARGUMENTS_ERROR_CODE}; fi
+
+ENVIRONMENT="$1"
+BROKER_ID="$2"
+ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${ENVIRONMENT}_config.properties"
+
+if ! [ -f "${ENV_PROPS_LOCATION}" ]; then 
+    cat <<EOF 
+The configuration file for '${ENVIRONMENT}' environment could not be found. Make sure it exists.
+
+Help:
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+Type 'kfk brokers help configs' to read more about 'configs' command.
+EOF
+    exit ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+KAFKA_CONFIGS_COMMAND="${KAFKA_CONFIGS_BIN} \
+    --entity-type brokers \
+    --entity-name ${BROKER_ID} \
+    --describe \
+    --all \
+    --command-config ${ENV_PROPS_LOCATION}"
+
+IFS=$'\n'
+for FILE_PROPERTY in $(cat ${ENV_PROPS_LOCATION} | egrep ^[a-zA-Z0-9]); do 
+    if [ "$FILE_PROPERTY" != "${FILE_PROPERTY/bootstrap.servers//}" ]; then
+        IFS=$'='; SPLITTED_BOOTSTRAP_SERVER=($FILE_PROPERTY); IFS=$'\n'
+        BOOTSTRAP_SERVER="${SPLITTED_BOOTSTRAP_SERVER[1]}"
+        KAFKA_CONFIGS_COMMAND="$KAFKA_CONFIGS_COMMAND --bootstrap-server $BOOTSTRAP_SERVER"
+    fi
+done
+
+eval $KAFKA_CONFIGS_COMMAND

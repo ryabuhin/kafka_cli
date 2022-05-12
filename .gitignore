@@ -1,0 +1,16 @@
+*.DS_Store
+.vscode
+.idea
+*.iws
+*.iml
+*.ipr
+/etc/tunnel/tunnel.properties
+/etc/env/*
+/etc/logging/*
+!/etc/env/local_config.properties
+!/etc/env/local-k1_config.properties
+!/etc/env/local-k2_config.properties
+!/etc/logging/debug-log4j.properties
+!/etc/logging/info-log4j.properties
+!/etc/logging/warn-log4j.properties
+!/etc/logging/error-log4j.properties

@@ -1,0 +1,130 @@
+#!/bin/bash
+#
+# Replicate all schemas with IDs between two schema registries.
+#
+# Required Arguments:
+#   'source'              : source environment FROM which replicate schemas.
+#   'target'              : target envirnment TO which replicate schemas.
+#
+# All configuration files must be stored in '${KFK_CLI_HOME}/etc/env' directory.
+# All configuration files must follow the following pattern name: <cluster-name>_config.properties
+# ---
+# author: valentine-riabukhin.pro
+
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+
+GRE='\e[0;32m'      # green
+RED='\e[0;31m'      # red
+YEL="\033[1;33m"    # yellow
+NCO="\033[0m"       # no color
+
+echoc() {
+    local color=$1
+    local message=$2
+    local color_prefix=''
+    [ "${color}" = "RED" ] && color_prefix="${RED}[-]${NCO}"
+    [ "${color}" = "GRE" ] && color_prefix="${GRE}[+]${NCO}"
+    [ "${color}" = "YEL" ] && color_prefix="${YEL}[?]${NCO}"
+    printf "${color_prefix} ${message}\n"
+}
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk sregistry replicate-all [<parameters>]
+Description:
+    Replicate all schemas with IDs between two schema registries.
+    
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+    
+    Required Arguments:
+      'source'              : source environment FROM which replicate schemas.
+      'target'              : target environment TO which replicate schemas.
+Examples:
+    kfk sregistry replicate-all dev local
+EOF
+    exit $exit_status
+}
+
+if [ "${1}" = 'help' ]; then usage
+elif [ -z "$1" ] || [ -z "$2" ]; then usage ${INVALID_ARGUMENTS_ERROR_CODE}; fi
+
+SOURCE_ENVIRONMENT="$1"
+TARGET_ENVIRONMENT="$2"
+SOURCE_ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${SOURCE_ENVIRONMENT}_config.properties"
+TARGET_ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${TARGET_ENVIRONMENT}_config.properties"
+
+if ! [ -f "${SOURCE_ENV_PROPS_LOCATION}" ]; then 
+    cat <<EOF 
+The configuration file for '${SOURCE_ENVIRONMENT}' environment could not be found. Make sure it exists.
+
+Help:
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+Type 'kfk sregistry help replicate-all' to read more about 'replicate-all' command.
+EOF
+    exit ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+if ! [ -f "${TARGET_ENV_PROPS_LOCATION}" ]; then 
+    cat <<EOF 
+The configuration file for '${TARGET_ENVIRONMENT}' environment could not be found. Make sure it exists.
+
+Help:
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+Type 'kfk sregistry help replicate-all' to read more about 'replicate-all' command.
+EOF
+    exit ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+SOURCE_SCHEMA_REGISTRY_URL=''
+SOURCE_SCHEMA_REGISTRY_BASIC_CREDS=':'
+TARGET_SCHEMA_REGISTRY_URL=''
+TARGET_SCHEMA_REGISTRY_BASIC_CREDS=':'
+
+IFS=$'\n'
+for FILE_PROPERTY in $(cat ${SOURCE_ENV_PROPS_LOCATION} | egrep ^[a-zA-Z0-9]); do 
+    if [ "$FILE_PROPERTY" != "${FILE_PROPERTY/schema.registry.url//}" ]; then SOURCE_SCHEMA_REGISTRY_URL="${FILE_PROPERTY#*=}"
+    elif [ "$FILE_PROPERTY" != "${FILE_PROPERTY/schema.registry.basic.auth.user.info//}" ]; then SOURCE_SCHEMA_REGISTRY_BASIC_CREDS="${FILE_PROPERTY#*=}"; fi
+done
+
+for FILE_PROPERTY in $(cat ${TARGET_ENV_PROPS_LOCATION} | egrep ^[a-zA-Z0-9]); do 
+    if [ "$FILE_PROPERTY" != "${FILE_PROPERTY/schema.registry.url//}" ]; then TARGET_SCHEMA_REGISTRY_URL="${FILE_PROPERTY#*=}"
+    elif [ "$FILE_PROPERTY" != "${FILE_PROPERTY/schema.registry.basic.auth.user.info//}" ]; then TARGET_SCHEMA_REGISTRY_BASIC_CREDS="${FILE_PROPERTY#*=}"; fi
+done
+
+for source_subject in $(curl -u ${SOURCE_SCHEMA_REGISTRY_BASIC_CREDS} -s "${SOURCE_SCHEMA_REGISTRY_URL}/subjects" | jq .[] -r); do 
+    echoc "YEL" "Processing schema for subject: $source_subject"; 
+    source_latest_api_response=$(curl -u ${SOURCE_SCHEMA_REGISTRY_BASIC_CREDS} -s "${SOURCE_SCHEMA_REGISTRY_URL}/subjects/${source_subject}/versions/latest" | jq . -c)
+    source_latest_schema=$(echo "$source_latest_api_response" | jq .schema -r -c)
+    source_latest_schema_id=$(echo "$source_latest_api_response" | jq .id -r)
+    source_latest_schema_version=$(echo "$source_latest_api_response" | jq .version -r)
+    quoted_source_latest_schema=$(echo "${source_latest_schema}" | sed 's/"/\\"/g')
+    # unlock subject to register new version with specific ID
+    curl -u ${TARGET_SCHEMA_REGISTRY_BASIC_CREDS} -s -XPUT "${TARGET_SCHEMA_REGISTRY_URL}/mode/${source_subject}" \
+        -d '{"mode": "IMPORT"}' -H "Content-Type: application/json" | jq . -c
+    # register subject
+    res_status_code=$(curl -u ${TARGET_SCHEMA_REGISTRY_BASIC_CREDS} -o /dev/null -w "%{http_code}" -s \
+        -XPOST "${TARGET_SCHEMA_REGISTRY_URL}/subjects/${source_subject}/versions" \
+        -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+        -d "{ \"schemaType\":\"AVRO\", \"version\":\"${source_latest_schema_version}\", \"id\":\"${source_latest_schema_id}\", \"schema\" : \"${quoted_source_latest_schema}\" }")
+    res_status_code=$(curl -u ${TARGET_SCHEMA_REGISTRY_BASIC_CREDS} -o /dev/null -w "%{http_code}" -s \
+        -XPOST "${TARGET_SCHEMA_REGISTRY_URL}/subjects/${source_subject}/versions" \
+        -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+        -d "{ \"schema\" : \"${quoted_source_latest_schema}\" }")
+    sleep 2s
+    # lock subject
+    curl -u ${TARGET_SCHEMA_REGISTRY_BASIC_CREDS} -s -XPUT "${TARGET_SCHEMA_REGISTRY_URL}/mode/${source_subject}" \
+        -d '{"mode": "READWRITE"}' -H "Content-Type: application/json" | jq . -c
+    if [ ! "$res_status_code" = '200' ]; then 
+        echoc "RED" "STATUS CODE: ${res_status_code}" && echoc "RED" "Something went wrong while the schema was being processed for subject: ${source_subject}"; 
+    else 
+        echoc "GRE" "The '${source_subject}' schema was sucessfully registered on the target environment.\n"
+    fi
+done

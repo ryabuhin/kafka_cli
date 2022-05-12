@@ -1,0 +1,138 @@
+#!/bin/bash
+#
+# Open SSH tunnel to the specific kafka cluster to work with environment locally.
+# It opens specific port on the local machine to work with remote kafka cluster.
+# See 'kfk tunnel help set-default-key' and 'kfk tunnel help set-key' 
+# if SSH key is not set yet for default usage or specific environment.
+# To open tunnel it is necessary to have configuration files named in following format:
+# '${KFK_CLI_HOME}/etc/env/local-<env-name>_config.properties' to define local interface
+# and '${KFK_CLI_HOME}/etc/env/<env-name>_config.properties' to define whole and real
+# configuration for kafka clients.
+#
+# Required Arguments:
+#   'environment'         : environment name of the specified kafka cluster.
+# Optional Arguments:
+#   'close_manually'      : if true, the tunnel will remain open until you close it manually.
+#                           if false, the tunnel will be automatically closed after 30 minutes.
+#                           false is a default value and tunnel will be closed automatically.
+#
+# All configuration files for kafka clients must be stored in '${KFK_CLI_HOME}/etc/env' directory.
+# All configuration files for kafka clients must follow the following pattern name: <cluster-name>_config.properties
+# Configuration file for SSH tunnels stores in '${KFK_CLI_HOME}/etc/tunnel' directory.
+# Open '${KFK_CLI_HOME}/etc/tunnel/tunnel.properties' file to make changes manually.
+# ---
+# author: valentine-riabukhin.pro
+
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+KFK_CLI_ETC_ENV="${KFK_CLI_HOME}/etc/env"
+KFK_CLI_BROKERS_BIN="${KFK_CLI_HOME}/bin/brokers"
+KFK_CLI_TUNNEL_PROPERTIES="${KFK_CLI_HOME}/etc/tunnel/tunnel.properties"
+TMP_TUNNELS_DIR='/tmp/kfk/tunnels'
+
+GRE='\e[0;32m'      # green
+RED='\e[0;31m'      # red
+YEL="\033[1;33m"    # yellow
+NCO="\033[0m"       # no color
+
+echoc() {
+    local color=$1
+    local message=$2
+    local color_prefix=''
+    [ "${color}" = "RED" ] && color_prefix="${RED}[-]${NCO}"
+    [ "${color}" = "GRE" ] && color_prefix="${GRE}[+]${NCO}"
+    [ "${color}" = "YEL" ] && color_prefix="${YEL}[?]${NCO}"
+    printf "${color_prefix} ${message}\n"
+}
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk tunnel open [<parameters>]
+Description:
+    Open SSH tunnel to the specific kafka cluster to work with environment locally.
+    It opens specific port on the local machine to work with remote kafka cluster.
+    See 'kfk tunnel help set-default-key' and 'kfk tunnel help set-key' 
+    if SSH key is not set yet for default usage or specific environment.
+    To open tunnel it is necessary to have configuration files named in following format:
+    'local-<env-name>_config.properties' to define local interface and 
+    '<env-name>_config.properties' to define whole and real
+    configuration for kafka clients.
+    
+    All configuration files for kafka clients must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files for kafka clients must follow the following pattern name: <cluster-name>_config.properties
+    Configuration file for SSH tunnels stores in '\${KFK_CLI_HOME}/etc/tunnel' directory.
+    Open '\${KFK_CLI_HOME}/etc/tunnel/tunnel.properties' file to make changes manually.
+    
+    Required Arguments:
+      'environment'         : environment name of the specified kafka cluster.
+    Optional Arguments:
+      'close_manually'      : if true, the tunnel will remain open until you close it manually.
+                              if false, the tunnel will be automatically closed after 30 minutes.
+                              false is a default value and tunnel will be closed automatically.
+Examples:
+    kfk tunnel open dev
+    kfk tunnel open dev --close_manually=true
+EOF
+    exit $exit_status
+}
+
+ENVIRONMENT="${1}"
+CLOSE_MANUALLY=$(echo "$2" | awk -F'[=]' '{print $2}' | awk '{print tolower($0)}')
+
+if [ "${1}" = 'help' ]; then usage
+elif [ -z "$1" ]; then 
+    echoc "RED" "'environment' is required argument."
+    usage ${INVALID_ARGUMENTS_ERROR_CODE}; 
+fi
+
+ENV_PROPS="${KFK_CLI_ETC_ENV}/${ENVIRONMENT}_config.properties"
+LOCAL_ENV_PROPS="${KFK_CLI_ETC_ENV}/local-${ENVIRONMENT}_config.properties"
+
+SSH_KEY_PATH="$(cat "${KFK_CLI_TUNNEL_PROPERTIES}" | grep -E "^${ENVIRONMENT}.key.path" | awk -F '[=]' '{print $2}')"
+[ -z "${SSH_KEY_PATH}" ] && SSH_KEY_PATH="$(cat "${KFK_CLI_TUNNEL_PROPERTIES}" | grep -E "^default.key.path" | awk -F '[=]' '{print $2}')"
+if [ -z "${SSH_KEY_PATH}" ]; then
+    echoc "RED" "No SSH key is set by default or for '${ENVIRONMENT}' environment." && usage ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+SSH_USR_MACHINE="$(cat "${KFK_CLI_TUNNEL_PROPERTIES}" | grep -E "^${ENVIRONMENT}.ssh.connection" | awk -F '[=]' '{print $2}')"
+[ -z "${SSH_USR_MACHINE}" ] && SSH_USR_MACHINE="$(cat "${KFK_CLI_TUNNEL_PROPERTIES}" | grep -E "^default.ssh.connection" | awk -F '[=]' '{print $2}')"
+if [ -z "${SSH_USR_MACHINE}" ]; then
+    echoc "RED" "No SSH connection is set by default or for '${ENVIRONMENT}' environment." && usage ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+[ ! -f "${SSH_KEY_PATH}" ] && echoc "RED" "SSH key file '${SSH_KEY_PATH}' does not exist." && usage ${INVALID_ARGUMENTS_ERROR_CODE};
+[ ! -f "${ENV_PROPS}" ] && echoc "RED" "Configuration file '${ENV_PROPS}' for kafka-clients does not exist." && usage ${INVALID_ARGUMENTS_ERROR_CODE}; 
+if [ ! -f "${LOCAL_ENV_PROPS}" ]; then
+    echoc "YEL" "Configuration file '${LOCAL_ENV_PROPS}' with defined local interface does not exist."
+    RANDOM_PORT=$[ $RANDOM % 26492 + 16492 ]
+    echoc "YEL" "Random port: $RANDOM_PORT on 0.0.0.0 interface is used by default."
+    local_kafka_bootstrap_servers_interface='0.0.0.0'
+    local_kafka_bootstrap_servers_port="${RANDOM_PORT}"
+else 
+    local_kafka_bootstrap_servers_interface=$(cat "${LOCAL_ENV_PROPS}" | grep -E '^bootstrap.servers' | awk -F'[=]' '{print $2}' | awk -F'[:]' '{print $1}')
+    local_kafka_bootstrap_servers_port=$(cat "${LOCAL_ENV_PROPS}" | grep -E '^bootstrap.servers' | awk -F'[:]' '{print $2}')
+fi
+
+if [ ! -z "$(lsof -n -i :$local_kafka_bootstrap_servers_port | grep LISTEN | awk '{print $2}' | uniq)" ]; then
+    echoc "RED" "Port '${local_kafka_bootstrap_servers_port}' is already in use." && usage ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+remote_kafka_bootstrap_servers=$(cat "${ENV_PROPS}" | grep -E '^bootstrap.servers' | awk -F'[=]' '{print $2}')
+[ -z "${remote_kafka_bootstrap_servers}" ] && echoc "RED" "Bad bootstrap servers in ${ENVIRONMENT}_config.properties" && usage ${INVALID_ARGUMENTS_ERROR_CODE}
+ssh -i "${SSH_KEY_PATH}" -f -N -L "${local_kafka_bootstrap_servers_interface}:${local_kafka_bootstrap_servers_port}:${remote_kafka_bootstrap_servers}" ${SSH_USR_MACHINE}
+
+# check brokers availability
+${KFK_CLI_BROKERS_BIN}/configs-all "local-${ENVIRONMENT}" &> /dev/null
+if [ ! "$?" = '0' ]; then
+    echoc "RED" "Tunnel can not be opened. Verify connection settings." && usage ${INVALID_ARGUMENTS_ERROR_CODE}
+    kill -9 $(lsof -n -i :$local_kafka_bootstrap_servers_port | grep LISTEN | awk '{print $2}' | uniq)
+fi
+echoc "GRE" "Tunnel is opened successfully."
+if [ ! "$CLOSE_MANUALLY" = "true" ]; then 
+    (sleep 1800s && kill -9 $(lsof -n -i :$local_kafka_bootstrap_servers_port | grep LISTEN | awk '{print $2}' | uniq) && rm -rf ${TMP_TUNNELS_DIR}/${ENVIRONMENT}) &
+    echoc "GRE" "Tunnel will be closed automatically in 30 minutes"
+else echoc "GRE" "Do not forget to close SSH tunnel manually"; fi
+
+[ ! -f "${TMP_TUNNELS_DIR}/${ENVIRONMENT}" ] && mkdir -p "${TMP_TUNNELS_DIR}"
+echo "port=${local_kafka_bootstrap_servers_port}" > "${TMP_TUNNELS_DIR}/${ENVIRONMENT}"

@@ -1,0 +1,36 @@
+---
+version: '2'
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    # ports:
+    #   - 2181:2181
+  
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT_MACHINE://${MACHINE_INTERFACE}:${K_MACHINE_PORT}, PLAINTEXT_DOCKER://kafka:9082
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT_MACHINE:PLAINTEXT,PLAINTEXT_DOCKER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_DOCKER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - ${K_MACHINE_PORT}:${K_MACHINE_PORT}
+      
+  sregistry:
+    image: confluentinc/cp-schema-registry:6.2.4
+    depends_on:
+      - kafka
+    environment:
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9082
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:${SR_MACHINE_PORT}
+      SCHEMA_REGISTRY_DEBUG: 'true'
+      SCHEMA_REGISTRY_HOST_NAME: sregistry
+    ports:
+      - ${SR_MACHINE_PORT}:${SR_MACHINE_PORT}

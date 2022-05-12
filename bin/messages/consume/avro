@@ -1,0 +1,85 @@
+#!/bin/bash
+#
+# Consume data from the beginning of the specified topic on environment encoded in apache AVRO format.
+# All records will be displayed in key-value format like: {"key": ..., "value": ...}.
+# Double quotes are escaped with '\"'.
+#
+# Required Arguments:
+#   'environment'         : environment name of the specified kafka cluster.
+#   'topic'               : topic name to consume records. 
+#
+# All configuration files must be stored in '${KFK_CLI_HOME}/etc/env' directory.
+# All configuration files must follow the following pattern name: <cluster-name>_config.properties
+# ---
+# author: valentine-riabukhin.pro
+
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+
+active_logger="${KFK_CLI_HOME}/etc/logging/active-log4j.properties"
+[ -f "${active_logger}" ] && export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:${active_logger}" || unset KAFKA_LOG4J_OPTS
+
+KAFKA_CONSOLE_CONSUMER_BIN=$(compgen -ac | grep kafka-console-consumer | head -n 1)
+export CLASSPATH="${KFK_CLI_HOME}/lib/java/*"
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk consume avro [<parameters>]
+Description:
+    Consume data from the beginning of the specified topic on environment encoded in apache AVRO format.
+    
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+    
+    Required Arguments:
+      'environment'         : environment name of the specified kafka cluster.
+      'topic'               : topic name to consume messages.
+Examples:
+    kfk consume avro dev dev-encoded-avro-topic
+    kfk consume avro local-dev dev-encoded-avro-topic
+EOF
+    exit $exit_status
+}
+
+if [ "${1}" = 'help' ]; then usage
+elif [ -z "$1" ] || [ -z "$2" ]; then usage ${INVALID_ARGUMENTS_ERROR_CODE}; fi
+
+ENVIRONMENT="$1"
+TOPIC_NAME="$2"
+ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${ENVIRONMENT}_config.properties"
+
+if ! [ -f "${ENV_PROPS_LOCATION}" ]; then 
+    cat <<EOF 
+The configuration file for '${ENVIRONMENT}' environment could not be found. Make sure it exists.
+
+Help:
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+Type 'kfk consume help avro' to read more about 'avro' command.
+EOF
+    exit ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+KAFKA_AVRO_CONSOLE_CONSUMER_PROPS="${KAFKA_CONSOLE_CONSUMER_BIN} --topic ${TOPIC_NAME} \
+    --formatter io.confluent.kafka.formatter.AvroMessageFormatter \
+    --from-beginning \
+    --property 'print.key=true' \
+    --property key.separator='|-_-|' \
+    --key-deserializer 'org.apache.kafka.common.serialization.StringDeserializer' \
+    --consumer.config ${ENV_PROPS_LOCATION}"
+
+IFS=$'\n'
+for FILE_PROPERTY in $(cat ${ENV_PROPS_LOCATION} | egrep ^[a-zA-Z0-9]); do 
+    if [ "$FILE_PROPERTY" != "${FILE_PROPERTY/bootstrap.servers//}" ]; then
+        IFS=$'='; SPLITTED_BOOTSTRAP_SERVER=($FILE_PROPERTY); IFS=$'\n'
+        BOOTSTRAP_SERVER="${SPLITTED_BOOTSTRAP_SERVER[1]}"
+        KAFKA_AVRO_CONSOLE_CONSUMER_PROPS="$KAFKA_AVRO_CONSOLE_CONSUMER_PROPS --bootstrap-server $BOOTSTRAP_SERVER"
+    else
+        KAFKA_AVRO_CONSOLE_CONSUMER_PROPS="$KAFKA_AVRO_CONSOLE_CONSUMER_PROPS --property '$FILE_PROPERTY'"
+    fi
+done
+
+eval "$KAFKA_AVRO_CONSOLE_CONSUMER_PROPS"

@@ -1,0 +1,81 @@
+#!/bin/bash
+#
+# Close SSH tunnel to the specific kafka cluster.
+#
+# Required Arguments:
+#   'environment'         : environment name of the specified kafka cluster.
+#
+# All configuration files for kafka clients must be stored in '${KFK_CLI_HOME}/etc/env' directory.
+# All configuration files for kafka clients must follow the following pattern name: <cluster-name>_config.properties
+# Configuration file for SSH tunnels stores in '${KFK_CLI_HOME}/etc/tunnel' directory.
+# Open '${KFK_CLI_HOME}/etc/tunnel/tunnel.properties' file to make changes manually.
+# ---
+# author: valentine-riabukhin.pro
+
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+KFK_CLI_ETC_ENV="${KFK_CLI_HOME}/etc/env"
+TMP_TUNNELS_DIR='/tmp/kfk/tunnels'
+
+GRE='\e[0;32m'      # green
+RED='\e[0;31m'      # red
+YEL="\033[1;33m"    # yellow
+NCO="\033[0m"       # no color
+
+echoc() {
+    local color=$1
+    local message=$2
+    local color_prefix=''
+    [ "${color}" = "RED" ] && color_prefix="${RED}[-]${NCO}"
+    [ "${color}" = "GRE" ] && color_prefix="${GRE}[+]${NCO}"
+    [ "${color}" = "YEL" ] && color_prefix="${YEL}[?]${NCO}"
+    printf "${color_prefix} ${message}\n"
+}
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk tunnel close [<parameters>]
+Description:
+    Close SSH tunnel to the specific kafka cluster.
+    
+    All configuration files for kafka clients must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files for kafka clients must follow the following pattern name: <cluster-name>_config.properties
+    Configuration file for SSH tunnels stores in '\${KFK_CLI_HOME}/etc/tunnel' directory.
+    Open '\${KFK_CLI_HOME}/etc/tunnel/tunnel.properties' file to make changes manually.
+    
+    Required Arguments:
+      'environment'         : environment name of the specified kafka cluster.
+
+Examples:
+    kfk tunnel close dev
+EOF
+    exit $exit_status
+}
+
+ENVIRONMENT="${1}"
+
+if [ "${1}" = 'help' ]; then usage
+elif [ -z "$1" ]; then 
+    echoc "RED" "'environment' is required argument."
+    usage ${INVALID_ARGUMENTS_ERROR_CODE}; 
+fi
+
+LOCAL_ENV_PROPS="${KFK_CLI_ETC_ENV}/local-${ENVIRONMENT}_config.properties"
+if [ -f "${TMP_TUNNELS_DIR}/${ENVIRONMENT}" ]; then
+    SSH_TUNNEL_LOCAL_PORT=$(cat "${TMP_TUNNELS_DIR}/${ENVIRONMENT}" | grep -E 'port' | awk -F'=' '{print $2}')
+elif [ -f "${LOCAL_ENV_PROPS}" ]; then
+    SSH_TUNNEL_LOCAL_PORT=$(cat "${LOCAL_ENV_PROPS}" | grep -E '^bootstrap.servers' | awk -F'[=]' '{print $2}' | awk -F'[:]' '{print $1}')
+    SSH_TUNNEL_LOCAL_PORT=$(cat "${LOCAL_ENV_PROPS}" | grep -E '^bootstrap.servers' | awk -F'[:]' '{print $2}')
+fi
+
+[ ! -z "${SSH_TUNNEL_LOCAL_PORT}" ] && PID_BY_PORT=$(lsof -n -i :$SSH_TUNNEL_LOCAL_PORT | grep LISTEN | awk '{print $2}' | uniq)
+if [ -z "${PID_BY_PORT}" ]; then
+    echoc "RED" "Tunnel for environment '${ENVIRONMENT}' is not open or active port can not be identified."
+    usage ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+kill -9 ${PID_BY_PORT}
+echoc "GRE" "Tunnel for '${ENVIRONMENT}' environment is closed successfully."
+rm -rf ${TMP_TUNNELS_DIR}/${ENVIRONMENT}

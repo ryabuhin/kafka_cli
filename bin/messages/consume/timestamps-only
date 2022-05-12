@@ -1,0 +1,91 @@
+#!/bin/bash
+#
+# Print timestamps only (CREATE_TIME) for each record from the topic on specified kafka cluster.
+# Output is sorted by default.
+#
+# Required Arguments:
+#   'environment'         : environment name of the specified kafka cluster.
+#   'topic'               : topic name as regexp to receive timestamps (CREATE_TIME) 
+#                           from single or multiple topics. 
+#
+# All configuration files must be stored in '${KFK_CLI_HOME}/etc/env' directory.
+# All configuration files must follow the following pattern name: <cluster-name>_config.properties
+# ---
+# author: valentine-riabukhin.pro
+
+sed_specific_unbuf_flag=$([ $(command -v sw_vers) ] && echo '-l' || echo '-u')
+
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+
+active_logger="${KFK_CLI_HOME}/etc/logging/active-log4j.properties"
+[ -f "${active_logger}" ] && export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:${active_logger}" || unset KAFKA_LOG4J_OPTS
+
+KAFKA_CONSOLE_CONSUMER_BIN=$(compgen -ac | grep kafka-console-consumer | head -n 1)
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk consume timestamps-only [<parameters>]
+Description:
+    Print timestamps only (CREATE_TIME) for each record from the topic on specified kafka cluster.
+    Output is sorted by default.
+    
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+    
+    Required Arguments:
+      'environment'         : environment name of the specified kafka cluster.
+      'topic-regexp'        : topic name as regexp to receive timestamps (CREATE_TIME) 
+                              from single or multiple topics. 
+Examples:
+    kfk consume timestamps-only dev dev-topic
+    kfk consume timestamps-only local-dev dev-topic
+EOF
+    exit $exit_status
+}
+
+if [ "${1}" = 'help' ]; then usage
+elif [ -z "$1" ] || [ -z "$2" ]; then usage ${INVALID_ARGUMENTS_ERROR_CODE}; fi
+
+ENVIRONMENT="$1"
+TOPIC_NAME_REGEXP="$2"
+ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${ENVIRONMENT}_config.properties"
+
+if ! [ -f "${ENV_PROPS_LOCATION}" ]; then 
+    cat <<EOF 
+The configuration file for '${ENVIRONMENT}' environment could not be found. Make sure it exists.
+
+Help:
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+Type 'kfk consume help timestamps-only' to read more about 'timestamps-only' command.
+EOF
+    exit ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+KAFKA_BYTES_CONSOLE_CONSUMER_PROPS="${KAFKA_CONSOLE_CONSUMER_BIN} --whitelist ${TOPIC_NAME_REGEXP} \
+    --timeout-ms 30000 \
+    --from-beginning \
+    --property 'print.timestamp=true' \
+    --property 'print.key=false' \
+    --property 'print.value=false' \
+    --property key.separator='\_|-_-|_/' \
+    --key-deserializer 'org.apache.kafka.common.serialization.ByteArrayDeserializer' \
+    --value-deserializer 'org.apache.kafka.common.serialization.ByteArrayDeserializer' \
+    --consumer.config ${ENV_PROPS_LOCATION}"
+
+IFS=$'\n'
+for FILE_PROPERTY in $(cat ${ENV_PROPS_LOCATION} | egrep ^[a-zA-Z0-9]); do 
+    if [ "$FILE_PROPERTY" != "${FILE_PROPERTY/bootstrap.servers//}" ]; then
+        IFS=$'='; SPLITTED_BOOTSTRAP_SERVER=($FILE_PROPERTY); IFS=$'\n'
+        BOOTSTRAP_SERVER="${SPLITTED_BOOTSTRAP_SERVER[1]}"
+        KAFKA_BYTES_CONSOLE_CONSUMER_PROPS="$KAFKA_BYTES_CONSOLE_CONSUMER_PROPS --bootstrap-server $BOOTSTRAP_SERVER"
+    else
+        KAFKA_BYTES_CONSOLE_CONSUMER_PROPS="$KAFKA_BYTES_CONSOLE_CONSUMER_PROPS --property '$FILE_PROPERTY'"
+    fi
+done
+
+eval "$KAFKA_BYTES_CONSOLE_CONSUMER_PROPS" | egrep -o '[0-9]+'

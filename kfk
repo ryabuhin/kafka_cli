@@ -1,0 +1,623 @@
+#!/bin/bash
+export KFK_CLI_HOME="${HOME}/.kafka_cli"
+KFK_CLI_BIN="${KFK_CLI_HOME}/bin"
+KFK_CLI_LOGGING="${KFK_CLI_HOME}/etc/logging"
+KFK_CLI_CONSUME_BIN="${KFK_CLI_HOME}/messages/consume"
+KFK_CLI_PRODUCE_BIN="${KFK_CLI_HOME}/messages/produce"
+KFK_CLI_TOPICS_BIN="${KFK_CLI_HOME}/topics"
+KFK_CLI_SREGISTRY_BIN="${KFK_CLI_HOME}/sregistry"
+KFK_CLI_BROKERS_BIN="${KFK_CLI_HOME}/brokers"
+KFK_CLI_CGROUPS_BIN="${KFK_CLI_HOME}/cgroups"
+KFK_CLI_TUNNEL_BIN="${KFK_CLI_HOME}/tunnel"
+KFK_CLI_SYSTEM_BIN="${KFK_CLI_HOME}/system"
+KFK_CLI_SYSTEM_LOCAL_ENV_BIN="${KFK_CLI_HOME}/local-env"
+
+declare -a root_commands_list=(
+    "consume"
+    "produce"    
+    "brokers"    
+    "cgroups"
+    "sregistry"   
+    "topics"  
+    "system"     
+    "logging"  
+    "tunnel"   
+    "version"
+)
+
+declare -a topics_subcommands_list=(
+    "list"
+    "configs"
+    "create"
+    "delete"
+    "describe"
+    "replicate"
+)
+
+declare -a consume_subcommands_list=(
+    "string"
+    "avro"
+    "string-pretty"
+    "avro-pretty"
+    "string-vd"
+    "avro-vd"
+    "event-by-id"
+    "timestamps-only"
+)
+
+declare -a produce_subcommands_list=(
+    "string"
+    "avro"
+    "string-batch"
+    "avro-batch"
+)
+
+declare -a sregistry_subcommands_list=(
+    "replicate"
+    "replicate-all"
+)
+
+declare -a brokers_subcommands_list=(
+    "configs"
+    "configs-all"
+)
+
+declare -a cgroups_subcommands_list=(
+    "describe"
+    "list"
+    "delete"
+    "shift-offsets"
+    "reset-offsets"
+    "show-lags"
+    "describe-all"
+    "replicate"
+)
+
+declare -a tunnel_subcommands_list=(
+    "list"
+    "open"
+    "close"
+    "provide-default"
+    "provide-env"
+)
+
+declare -a system_subcommands_list=(
+    "local-env"
+    "maintain-replica"
+)
+
+declare -a system_localenv_subcommands_list=(
+    "list"
+    "create"
+    "destroy"
+)
+
+command_name="$( basename "${BASH_SOURCE[0]}" )" # command_name = script name (kfk)
+
+GRE='\e[0;32m'      # green
+RED='\e[0;31m'      # red
+YEL="\033[1;33m"    # yellow
+NCO="\033[0m"       # no color
+
+ERROR_CODE=1
+COMMAND_NOT_FOUND_ERROR_CODE=127
+
+#### ALL COMMANDS
+echoc() {
+    local color=$1
+    local message=$2
+    local color_prefix=''
+    [ "${color}" = "RED" ] && color_prefix="${RED}[-]${NCO}"
+    [ "${color}" = "GRE" ] && color_prefix="${GRE}[+]${NCO}"
+    [ "${color}" = "YEL" ] && color_prefix="${YEL}[?]${NCO}"
+    printf "${color_prefix} ${message}\n"
+}
+
+exit_with_base_error_message() {
+    echo "$@"
+    exit ${ERROR_CODE}
+}
+
+command_exists() {
+    local command="${1}"
+    exists "${command}" "commands" || exists "${command}" "confluent_platform_commands"
+}
+
+exists() {
+    local arg="${1}"
+    case "${2}" in
+        "commands") local list=( "${root_commands_list[@]}" );;
+    esac
+
+    local entry=""
+    for entry in "${list[@]}"; do
+        [[ ${entry} == "${arg}" ]] && return 0;
+    done
+    return
+}
+
+tunnel_set-default-key_command() {
+    local key_path=${1}
+    [ -z "${key_path}" ] && echoc "RED" "key path is required argument."
+    echo "default.key.path=${key_path}" >> "${KFK_CLI_HOME}/etc/tunnel/tunnel.properties"
+}
+
+set_kafka_logger() {
+    local subcommand="${1}"
+    local level_mode="$(echo ${subcommand} | awk -F'[-]' {'print $2}')"
+    if [ ! -f "${KFK_CLI_LOGGING}/${level_mode}-log4j.properties" ]; then 
+        echoc "RED" "Logger file '${level_mode}' not found. Verify that specified logger file exists."
+        logging_usage ${subcommand} $ERROR_CODE
+    fi
+    rm -rf "${KFK_CLI_LOGGING}/active-log4j.properties"
+    ln -s "${KFK_CLI_LOGGING}/${level_mode}-log4j.properties" "${KFK_CLI_LOGGING}/active-log4j.properties" 2> /dev/null
+    active_logger="${KFK_CLI_HOME}/etc/logging/active-log4j.properties"
+    echoc "GRE" "Logger '$(echo ${level_mode} | awk '{print toupper($0)}')' is sucessfully set as ACTIVE."
+}
+
+topics_subcommands() {
+    local subcommand="${1}"
+    case "${subcommand}" in
+        list) shift && ${KFK_CLI_TOPICS_BIN}/${subcommand} "$@";;
+        configs) shift && ${KFK_CLI_TOPICS_BIN}/${subcommand} "$@";;
+        create) shift && ${KFK_CLI_TOPICS_BIN}/${subcommand} "$@";;
+        delete) shift && ${KFK_CLI_TOPICS_BIN}/${subcommand} "$@";;
+        describe) shift && ${KFK_CLI_TOPICS_BIN}/${subcommand} "$@";;
+        replicate) shift && ${KFK_CLI_TOPICS_BIN}/${subcommand} "$@";;
+        help) 
+            shift
+            if [[ "${topics_subcommands_list[*]}" =~ "${1}" ]]; then "${KFK_CLI_TOPICS_BIN}/${1}" 'help'
+            else invalid_subcommand "topics" "$@"; fi;;
+        *) invalid_subcommand "topics" "$@";;
+    esac
+}
+
+brokers_subcommands() {
+    local subcommand="${1}"
+    case "${subcommand}" in
+        configs) shift && ${KFK_CLI_BROKERS_BIN}/${subcommand} "$@";;
+        configs-all) shift && ${KFK_CLI_BROKERS_BIN}/${subcommand} "$@";;
+        help) 
+            shift
+            if [[ "${brokers_subcommands_list[*]}" =~ "${1}" ]]; then "${KFK_CLI_BROKERS_BIN}/${1}" 'help'
+            else invalid_subcommand "brokers" "$@"; fi;;
+        *) invalid_subcommand "brokers" "$@";;
+    esac
+}
+
+consume_subcommands() {
+    local subcommand="${1}"
+    case "${subcommand}" in
+        string) shift && ${KFK_CLI_CONSUME_BIN}/${subcommand} "$@";;
+        avro) shift && ${KFK_CLI_CONSUME_BIN}/${subcommand} "$@";;
+        string-pretty) shift && ${KFK_CLI_CONSUME_BIN}/${subcommand} "$@";;
+        avro-pretty) shift && ${KFK_CLI_CONSUME_BIN}/${subcommand} "$@";;
+        string-vd) shift && ${KFK_CLI_CONSUME_BIN}/${subcommand} "$@";;
+        avro-vd) shift && ${KFK_CLI_CONSUME_BIN}/${subcommand} "$@";;
+        event-by-id) shift && ${KFK_CLI_CONSUME_BIN}/${subcommand} "$@";;
+        timestamps-only) shift && ${KFK_CLI_CONSUME_BIN}/${subcommand} "$@";;
+        help) 
+            shift
+            if [[ "${consume_subcommands_list[*]}" =~ "${1}" ]]; then "${KFK_CLI_CONSUME_BIN}/${1}" 'help'
+            else invalid_subcommand "consume" "$@"; fi;;
+        *) invalid_subcommand "consume" "$@";;
+    esac
+}
+
+produce_subcommands() {
+    local subcommand="${1}"
+    case "${subcommand}" in
+        string) shift && ${KFK_CLI_PRODUCE_BIN}/${subcommand} "$@";;
+        avro) shift && ${KFK_CLI_PRODUCE_BIN}/${subcommand} "$@";;
+        string-batch) shift && ${KFK_CLI_PRODUCE_BIN}/${subcommand} "$@";;
+        avro-batch) shift && ${KFK_CLI_PRODUCE_BIN}/${subcommand} "$@";;
+        help) 
+            shift
+            if [[ "${produce_subcommands_list[*]}" =~ "${1}" ]]; then "${KFK_CLI_PRODUCE_BIN}/${1}" 'help'
+            else invalid_subcommand "produce" "$@"; fi;;
+        *) invalid_subcommand "produce" "$@";;
+    esac
+}
+
+cgroups_subcommands() {
+    local subcommand="${1}"
+    case "${subcommand}" in
+        describe) shift && ${KFK_CLI_CGROUPS_BIN}/${subcommand} "$@";;
+        list) shift && ${KFK_CLI_CGROUPS_BIN}/${subcommand} "$@";;
+        delete) shift && ${KFK_CLI_CGROUPS_BIN}/${subcommand} "$@";;
+        shift-offsets) shift && ${KFK_CLI_CGROUPS_BIN}/${subcommand} "$@";;
+        reset-offsets) shift && ${KFK_CLI_CGROUPS_BIN}/${subcommand} "$@";;
+        show-lags) shift && ${KFK_CLI_CGROUPS_BIN}/${subcommand} "$@";;
+        describe-all) shift && ${KFK_CLI_CGROUPS_BIN}/${subcommand} "$@";;
+        replicate) shift && echoc "RED" "Subcommand kfk cgroups replicate not implemented yet!" && invalid_subcommand "cgroups" "$@";;
+        help) 
+            shift
+            if [[ "${cgroups_subcommands_list[*]}" =~ "${1}" ]]; then "${KFK_CLI_CGROUPS_BIN}/${1}" 'help'
+            else invalid_subcommand "cgroups" "$@"; fi;;
+        *) invalid_subcommand "cgroups" "$@";;
+    esac
+}
+
+sregistry_subcommands() {
+    local subcommand="${1}"
+    case "${subcommand}" in
+        replicate) shift && ${KFK_CLI_SREGISTRY_BIN}/${subcommand} "$@";;
+        replicate-all) shift && ${KFK_CLI_SREGISTRY_BIN}/${subcommand} "$@";;
+        help) 
+            shift
+            if [[ "${sregistry_subcommands_list[*]}" =~ "${1}" ]]; then "${KFK_CLI_SREGISTRY_BIN}/${1}" 'help'
+            else invalid_subcommand "sregistry" "$@"; fi;;
+        *) invalid_subcommand "sregistry" "$@";;
+    esac
+}
+
+system_subcommands() {
+    local subcommand="${1}"
+    case "${subcommand}" in
+        local-env) shift && system_local-env_subcommands "$@";;
+        maintain-replica) shift && ${KFK_CLI_SYSTEM_BIN}/${subcommand} "$@";;
+        help) 
+            shift
+            if [[ "${system_subcommands_list[*]}" =~ "${1}" ]]; then "${KFK_CLI_SYSTEM_BIN}/${1}" 'help'
+            else invalid_subcommand "system" "$@"; fi;;
+        *) invalid_subcommand "system" "$@";;
+    esac
+}
+
+system_local-env_subcommands() {
+    local subcommand="${1}"
+    case "${subcommand}" in
+        list) shift && "${KFK_CLI_SYSTEM_LOCAL_ENV_BIN}-${subcommand}" "$@";;
+        create) shift && "${KFK_CLI_SYSTEM_LOCAL_ENV_BIN}-${subcommand}" "$@";;
+        destroy) shift && "${KFK_CLI_SYSTEM_LOCAL_ENV_BIN}-${subcommand}" "$@";;
+        help) 
+            shift
+            if [[ "${system_localenv_subcommands_list[*]}" =~ "${1}" ]]; then "${KFK_CLI_SYSTEM_BIN}/${1}" 'help'
+            else invalid_subcommand "system_local-env" "$@"; fi;;
+        *) invalid_subcommand "system_local-env" "$@";;
+    esac
+}
+
+logging_subcommands() {
+    local subcommand="${1}"
+    case "${subcommand}" in
+        set-debug) set_kafka_logger "$@";;
+        set-info) set_kafka_logger "$@";;
+        set-warn) set_kafka_logger "$@";;
+        set-error) set_kafka_logger "$@";;
+        *) 
+            if [ "$(echo ${subcommand} | awk -F'[-]' {'print $1}')" = 'set' ]; then set_kafka_logger "$@"
+            else invalid_subcommand "logging" "$@"; fi;;
+    esac
+}
+
+tunnel_subcommands() {
+    local subcommand="${1}"
+    case "${subcommand}" in
+        list) shift && ${KFK_CLI_TUNNEL_BIN}/${subcommand};;
+        open) shift && ${KFK_CLI_TUNNEL_BIN}/${subcommand} "$@";;
+        close) shift && ${KFK_CLI_TUNNEL_BIN}/${subcommand} "$@";;
+        provide-default) shift && ${KFK_CLI_TUNNEL_BIN}/${subcommand} "$@";;
+        provide-env) shift && ${KFK_CLI_TUNNEL_BIN}/${subcommand} "$@";;
+        help) 
+            shift
+            if [[ "${tunnel_subcommands_list[*]}" =~ "${1}" ]]; then "${KFK_CLI_TUNNEL_BIN}/${1}" 'help'
+            else invalid_subcommand "tunnel" "$@"; fi;;
+        *) invalid_subcommand "tunnel" "$@";;
+    esac
+}
+
+####
+
+root_usage() {
+    local command="${1}"
+    local exit_status="${2}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+${command_name}: A command line interface to manage kafka services
+
+Usage: ${command_name} <command> [<subcommand>] [<parameters>]
+These are the available commands:
+    consume     Consume data from topics.
+    produce     Produce data to topics.
+    brokers     Manage kafka brokers.
+    cgroups     Manage consumer groups.
+    sregistry   Manage schema registry service.
+    topics      Manage kafka topics.
+    system      Analze kafka cluster and maintain the environment replication.
+    logging     Administer the logging of kafka services.
+    tunnel      Manage SSH tunnels from local machine to remote kafka clusters.
+    version     Print the kfk-cli version or the individual version of a local services.
+
+See '${command_name} help <command>' to read about a specific command.
+EOF
+    exit $exit_status
+}
+
+topics_usage() {
+    local command="${1}"
+    local exit_status="${2}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: ${command_name} ${command} <subcommand> [<parameters>]
+Description:
+    Manage Kafka topics using list of subcommands with provided parameters.
+    
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+    
+    Subcommand options:
+      'configs'         : describe detailed topic configuration on the specified kafka cluster.
+      'describe'        : describe minimized topic configuration (like partitions, replication factor, 
+                          cleanup.policy) on the specified kafka cluster.
+      'list'            : get list of available topics on the kafka cluster.
+      'create'          : create topic on the specified kafka cluster with provided parameters.
+      'delete'          : delete topic by regexp pattern on the specified kafka cluster.
+      'replicate'       : replicate topics between specified kafka clusters.
+Examples:
+    ${command_name} ${command} create <parameters>
+    ${command_name} ${command} configs <parameters>
+    ${command_name} ${command} delete <parameters>
+EOF
+    exit $exit_status
+}
+
+brokers_usage() {
+    local command="${1}"
+    local exit_status="${2}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: ${command_name} ${command} <subcommand> [<parameters>]
+Description:
+    Manage Kafka brokers using list of subcommands with provided parameters.
+    
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+    
+    Subcommand options:
+      'configs'         : describe detailed broker configuration by its ID on the specified kafka cluster.
+      'configs-all'     : describe detailed configuration for each broker on the specified kafka cluster.
+Examples:
+    ${command_name} ${command} configs <parameters>
+EOF
+    exit $exit_status
+}
+
+produce_usage() {
+    local command="${1}"
+    local exit_status="${2}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: ${command_name} ${command} <subcommand> [<parameters>]
+Description:
+    Produce records to topic on the specified kafka cluster.
+
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+    Subcommand options:
+      'string'          : produce single record as STRING to topic on the specified kafka cluster.
+      'avro'            : produce single  as AVRO to topic on the specified kafka cluster.
+      'string-batch'    : produce batch of records as STRING to topic on the specified kafka cluster.
+      'avro-batch'      : produce batch of records as AVRO to topic on the specified kafka cluster.
+
+Examples:
+    ${command_name} ${command} string <parameters>
+    ${command_name} ${command} avro <parameters>
+EOF
+    exit $exit_status
+}
+
+consume_usage() {
+    local command="${1}"
+    local exit_status="${2}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: ${command_name} ${command} <subcommand> [<parameters>]
+Description:
+    Consume records from topic on the specified kafka cluster.
+
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+    Subcommand options:
+      'string'          : consume records as STRING from topic on the specified kafka cluster.
+      'avro'            : consume records as AVRO from topic on the specified kafka cluster.
+      'string-pretty'   : consume records as STRING from the specific topic and display it pretty.
+      'avro-pretty'     : consume records as AVRO from the specific topic and display it pretty.
+      'string-vd'       : consume data in STRING and represent it as table of visidata tool.
+      'avro-vd'         : consume data in AVRO and represent it as table of visidata tool.
+      'timestamps-only' : consume and print only message timestamps.
+
+Examples:
+    ${command_name} ${command} string <parameters>
+    ${command_name} ${command} avro <parameters>
+EOF
+    exit $exit_status
+}
+
+cgroups_usage() {
+    local command="${1}"
+    local exit_status="${2}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: ${command_name} ${command} <subcommand> [<parameters>]
+Description:
+    Manage consumer groups using list of subcommands with provided parameters.
+
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+    Subcommand options:
+      'list'            : list available consumer groups on the specified kafka cluster.
+      'delete'          : delete inactive consumer group on the specified kafka cluster. 
+      'describe'        : get detailed information about counsumer group on the specified kafka cluster.
+      'describe-all'    : the same as 'describe' but this desribes all consumer groups.
+      'shift-offsets'   : move offsets for specific consumer group on the specified kafka cluster.
+      'reset-offsets'   : reset offsets for specific consumer group on the specified kafka cluster.
+      'show-lags'       : show lags for all consumer groups available on specific kafka cluster.
+      'replicate'       : replicate consumer groups between kafka clusters.
+
+Examples:
+    ${command_name} ${command} list <parameters>
+    ${command_name} ${command} delete <parameters>
+    ${command_name} ${command} describe <parameters>
+EOF
+    exit $exit_status
+}
+
+sregistry_usage() {
+    local command="${1}"
+    local exit_status="${2}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: ${command_name} ${command} <subcommand> [<parameters>]
+Description:
+    Manage schema registry service using list of subcommands with provided parameters.
+
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+    Subcommand options:
+      'replicate'           : replicate spceficic schemas between specified schema registry services.
+      'replicate-all'       : replicate all schemas between specified schema registry services.
+
+Examples:
+    ${command_name} ${command} replicate <parameters>
+EOF
+    exit $exit_status
+}
+
+system_usage() {
+    local command="${1}"
+    local exit_status="${2}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: ${command_name} ${command} <subcommand> [<parameters>]
+Description:
+    System commands for working with the cluster as a whole using list of subcommands with provided parameters.
+
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+    Subcommand options:
+      'local-env'           : manage local kafka clusters.
+      'maintain-replica'    : replicate content of topics between kafka clusters.
+
+Examples:
+    ${command_name} ${command} local-env ${subcommand} <parameters>
+    ${command_name} ${command} maintain-replica <parameters>
+EOF
+    exit $exit_status
+}
+
+system_local-env_usage() {
+    local subcommand="${1}"
+    local exit_status="${2}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk system local-env <subcommand> [<parameters>]
+Description:
+    Manage local kafka cluster. Cluster includes instance of zookeeper, kafka broker and schema-registry.
+
+    Script requires the installation of the docker-compose utility to work properly with docker-compose.
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+    Subcommand options:
+      'create'          : create local kafka environment with schema-registry.
+      'list'            : get list of local kafka environments.
+      'destroy'         : delete local kafka environment.
+
+Examples:
+    ${command_name} system local-env create <parameters>
+    ${command_name} system local-env destroy <parameters>
+EOF
+    exit $exit_status
+}
+
+logging_usage() {
+    local command="${1}"
+    local exit_status="${2}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: ${command_name} ${command} <subcommand> [<parameters>]
+Description:
+    Administer logger (debug etc.) to work properly with all kafka binaries.
+
+    All logger files must be stored in '\${KFK_CLI_HOME}/etc/logging' directory.
+    All logger files must follow the following pattern name: <logger_name>-log4j.properties
+
+    Subcommand options:
+      'set-debug'       : set root logger to DEBUG level.
+      'set-info'        : set root logger to INFO level.
+      'set-warn'        : set root logger to WARN level.
+      'set-error'       : set root logger to ERROR level.
+      'set-<custom>'    : set your own logger with provided levels for each package.
+
+Examples:
+    ${command_name} ${command} set-debug <parameters>
+    ${command_name} ${command} set-error <parameters>
+    ${command_name} ${command} set-mylogger <parameters>
+EOF
+    exit $exit_status
+}
+
+tunnel_usage() {
+    local command="${1}"
+    local exit_status="${2}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: ${command_name} ${command} <subcommand> [<parameters>]
+Description:
+    Build SSH tunnel to work with kafka clusters on the specified environment.
+
+    All configuration files for tunnels must be stored in '\${KFK_CLI_HOME}/etc/tunnel' directory.
+    All configuration files must follow the following pattern name: <env_name>-tunnel.properties
+    Use '${command_name} ${command} provide-env <parameters>' to create property file using cli-tool.
+
+    Subcommand options:
+      'list'            : show list of currently open SSH tunnels for all environments.
+      'open'            : open SSH tunnel to the specific kafka cluster.
+      'close'           : close SSH tunnel for specific kafka cluster.
+      'provide-env'     : set SSH key and user@host for specific environment to open tunnel.
+      'provide-default' : set SSH key and user@host as default configuration to open tunnel.
+
+Examples:
+    ${command_name} ${command} open <parameters>
+    ${command_name} ${command} list <parameters>
+    ${command_name} ${command} provide-env <parameters>
+EOF
+    exit $exit_status
+}
+
+invalid_command() {
+    local command="${1}"
+    [ -z ${command} ] && echoc "YEL" "Empty command." || echoc "RED" "Unknown command '${command}'."
+    root_usage "${command}" "${COMMAND_NOT_FOUND_ERROR_CODE}"
+}
+
+invalid_subcommand() {
+    local command="${1}"
+    shift
+    local subcommand="${1}"
+    [ -z ${subcommand} ] && echoc "YEL" "Empty subcommand for command ${command}." || echoc "RED" "Unknown subcommand '${1}' for ${command}."
+    printf "\n" && ${command}_usage "${command}" "${COMMAND_NOT_FOUND_ERROR_CODE}"
+}
+
+command="${1}"
+shift
+case "${command}" in
+    help) [[ -n "${1}" ]] && (command_exists "${1}" && ( "${1}"_usage "$@" || invalid_command "${1}" )) ||  root_usage;;
+    topics) topics_subcommands "$@";;
+    brokers) brokers_subcommands "$@";;
+    consume) consume_subcommands "$@";;
+    produce) produce_subcommands "$@";;
+    cgroups) cgroups_subcommands "$@";;
+    sregistry) sregistry_subcommands "$@";;
+    system) system_subcommands "$@";;
+    logging) logging_subcommands "$@";;
+    tunnel) tunnel_subcommands "$@";;
+    version) version_subcommands "$@";;
+    *) invalid_command "${command}";;
+esac

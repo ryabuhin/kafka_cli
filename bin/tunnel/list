@@ -1,0 +1,67 @@
+#!/bin/bash
+#
+# Show list of currently open SSH tunnels for all environments.
+#
+# Configuration file for SSH tunnels stores in '${KFK_CLI_HOME}/etc/tunnel' directory.
+# Open '${KFK_CLI_HOME}/etc/tunnel/tunnel.properties' file to make changes manually.
+# ---
+# author: valentine-riabukhin.pro
+
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+TMP_TUNNELS_DIR='/tmp/kfk/tunnels'
+# KFK_CLI_ETC_ENV="${KFK_CLI_HOME}/etc/env/"
+# KFK_CLI_BROKERS_BIN="${KFK_CLI_HOME}/bin/brokers"
+
+GRE='\e[0;32m'      # green
+RED='\e[0;31m'      # red
+YEL="\033[1;33m"    # yellow
+NCO="\033[0m"       # no color
+
+echoc() {
+    local color=$1
+    local message=$2
+    local color_prefix=''
+    [ "${color}" = "RED" ] && color_prefix="${RED}[-]${NCO}"
+    [ "${color}" = "GRE" ] && color_prefix="${GRE}[+]${NCO}"
+    [ "${color}" = "YEL" ] && color_prefix="${YEL}[?]${NCO}"
+    printf "${color_prefix} ${message}\n"
+}
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk tunnel list [<parameters>]
+Description:
+    Get list of all currently active SSH tunnels.
+    
+    Configuration file for SSH tunnels stores in '${KFK_CLI_HOME}/etc/tunnel' directory.
+    Open '\${KFK_CLI_HOME}/etc/tunnel/tunnel.properties' file to make changes manually.
+    
+Examples:
+    kfk tunnel list
+EOF
+    exit $exit_status
+}
+
+[ "${1}" = 'help' ] && usage
+
+echo "List of active tunnels:"
+active_tunnels_count=0
+[ -d "${TMP_TUNNELS_DIR}" ] && for env_file in $(ls "${TMP_TUNNELS_DIR}"); do 
+    SSH_TUNNEL_LOCAL_PORT=$(cat "${TMP_TUNNELS_DIR}/${env_file}" | grep -E 'port' | awk -F'=' '{print $2}')
+    [ ! -z "${SSH_TUNNEL_LOCAL_PORT}" ] && PID_BY_PORT=$(lsof -n -i :$SSH_TUNNEL_LOCAL_PORT | grep LISTEN | awk '{print $2}' | uniq)
+    if [ ! -z "${PID_BY_PORT}" ]; then
+        # check brokers availability
+        # ${KFK_CLI_BROKERS_BIN}/configs-all "local-${env_file}" &> /dev/null
+        [ ! "$?" = '0' ] && continue
+        active_tunnels_count=$((active_tunnels_count+1))
+        env_name_upper="$(echo "$env_file" | awk '{print toupper($0)}')"
+        printf "${GRE}${env_name_upper}${NCO} (port: ${SSH_TUNNEL_LOCAL_PORT} / pid: ${PID_BY_PORT})\n"
+    fi
+done
+
+if [ ${active_tunnels_count} = 0 ]; then
+    echoc "YEL" 'No active tunnel found.'
+fi

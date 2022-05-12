@@ -1,0 +1,55 @@
+#!/bin/bash
+#
+# Get list of local kafka clusters and configuration info.
+# Script requires the installation of the docker and docker-compose utilities to work properly with docker.
+# Open '${KFK_CLI_HOME}/etc/system/zksr-compose.yml' compose file to make changes in kafka cluster.
+# ---
+# author: valentine-riabukhin.pro
+
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+
+GRE='\e[0;32m'      # green
+RED='\e[0;31m'      # red
+YEL="\033[1;33m"    # yellow
+NCO="\033[0m"       # no color
+
+echoc() {
+    local color=$1
+    local message=$2
+    local color_prefix=''
+    [ "${color}" = "RED" ] && color_prefix="${RED}[-]${NCO}"
+    [ "${color}" = "GRE" ] && color_prefix="${GRE}[+]${NCO}"
+    [ "${color}" = "YEL" ] && color_prefix="${YEL}[?]${NCO}"
+    printf "${color_prefix} ${message}\n"
+}
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk system local-env list [<parameters>]
+Description:
+    Get list of local kafka clusters and configuration info.
+    Script requires the installation of the docker and docker-compose utilities to work properly with docker.
+    Open '\${KFK_CLI_HOME}/etc/system/zksr-compose.yml' compose file to make changes in kafka cluster.
+
+Examples:
+    kfk system local-env create k1
+EOF
+    exit $exit_status
+}
+
+[ "${1}" = 'help' ] && usage
+
+echo "List of active local kafka-environments:"
+kafka_envs=$(docker ps -a -f "name=kfk-.+_kafka" | grep -E -o 'kfk-.*' | cut -d- -f2- | awk -F'_kafka_' '{print $1}' | sort | uniq)
+if [ ! -z "${kafka_envs}" ]; then 
+    for kenv in ${kafka_envs}; do
+        k_port=$(docker ps -a -f "name=kfk-${kenv}_kafka" | grep -E -o '[0-9]+->[0-9]+/tcp' | awk -F'[-]' '{print $1}')
+        sr_port=$(docker ps -a -f "name=kfk-${kenv}_sregistry" | grep -E -o '[0-9]+->[0-9]+/tcp' | awk -F'[-]' '{print $1}')
+        printf "${GRE}$(echo $kenv | awk '{print toupper($0)}')${NCO} (kafka port: ${k_port} / schema-registry port: ${sr_port})\n"
+    done
+else 
+    echoc "YEL" "No active local environments found."
+fi

@@ -1,0 +1,130 @@
+#!/bin/bash
+#
+# Replicate consumer groups from given environment and reset all offsets to the latest.
+#
+# Required Arguments:
+#   'source'              : source environment FROM which replicate cgroups.
+#   'target'              : target envirnment TO which replicate cgroups.
+#   'group_regex'         : list of consumer groups as regex to replicate.
+#
+# All configuration files must be stored in '${KFK_CLI_HOME}/etc/env' directory.
+# All configuration files must follow the following pattern name: <cluster-name>_config.properties
+# ---
+# author: valentine-riabukhin.pro
+
+GRE='\e[0;32m'      # green
+RED='\e[0;31m'      # red
+YEL="\033[1;33m"    # yellow
+NCO="\033[0m"       # no color
+
+echoc() {
+    local color=$1
+    local message=$2
+    local color_prefix=''
+    [ "${color}" = "RED" ] && color_prefix="${RED}[-]${NCO}"
+    [ "${color}" = "GRE" ] && color_prefix="${GRE}[+]${NCO}"
+    [ "${color}" = "YEL" ] && color_prefix="${YEL}[?]${NCO}"
+    printf "${color_prefix} ${message}\n"
+}
+
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+
+active_logger="${KFK_CLI_HOME}/etc/logging/active-log4j.properties"
+[ -f "${active_logger}" ] && export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:${active_logger}" || unset KAFKA_LOG4J_OPTS
+
+KAFKA_CONSOLE_CONSUMER_BIN=$(compgen -ac | grep kafka-console-consumer | head -n 1)
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: kfk cgroups replicate [<parameters>]
+Description:
+    Replicate consumer groups from given environment and reset all offsets to the latest.
+    
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+    
+    Required Arguments:
+       'source'              : source environment FROM which replicate cgroups.
+       'target'              : target envirnment TO which replicate cgroups.
+       'group_regex'         : list of consumer groups as regex to replicate.
+
+Examples:
+    kfk cgroups replicate dev stage 'consumer-.+'
+    kfk cgroups replicate local-dev local 'consumer-.+'
+EOF
+    exit $exit_status
+}
+
+if [ "${1}" = 'help' ]; then usage
+elif [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then usage ${INVALID_ARGUMENTS_ERROR_CODE}; fi
+
+SOURCE_ENVIRONMENT="$1"
+TARGET_ENVIRONMENT="$2"
+PATTERN="$3"
+SOURCE_ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${SOURCE_ENVIRONMENT}_config.properties"
+TARGET_ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${TARGET_ENVIRONMENT}_config.properties"
+
+if ! [ -f "${SOURCE_ENV_PROPS_LOCATION}" ]; then 
+    cat <<EOF 
+The configuration file for '${SOURCE_ENVIRONMENT}' environment could not be found. Make sure it exists.
+
+Help:
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+Type 'kfk cgroups help replicate' to read more about 'replicate' command.
+EOF
+    exit ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+if ! [ -f "${TARGET_ENV_PROPS_LOCATION}" ]; then 
+    cat <<EOF 
+The configuration file for '${TARGET_ENVIRONMENT}' environment could not be found. Make sure it exists.
+
+Help:
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+Type 'kfk cgroups help replicate' to read more about 'replicate' command.
+EOF
+    exit ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+create_consumer_group() {
+
+    ENVIRONMENT="$1"
+    CONSUMER_GROUP_NAME="$2"
+    TOPIC_NAME="$3"
+
+    ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${ENVIRONMENT}_config.properties"
+    KAFKA_CONSOLE_CONSUMER_PROPS="${KAFKA_CONSOLE_CONSUMER_BIN} --topic ${TOPIC_NAME} \
+        --from-beginning \
+        --property 'print.key=true' \
+        --property key.separator='\_|-_-|_/' \
+        --group ${CONSUMER_GROUP_NAME} \
+        --consumer.config ${ENV_PROPS_LOCATION} \
+        --timeout-ms 10000"
+
+    IFS=$'\n'
+    for FILE_PROPERTY in $(cat ${ENV_PROPS_LOCATION} | egrep ^[a-zA-Z0-9]); do 
+        if [ "$FILE_PROPERTY" != "${FILE_PROPERTY/bootstrap.servers//}" ]; then
+            IFS=$'='; SPLITTED_BOOTSTRAP_SERVER=($FILE_PROPERTY); IFS=$'\n'
+            BOOTSTRAP_SERVER="${SPLITTED_BOOTSTRAP_SERVER[1]}"
+            KAFKA_CONSOLE_CONSUMER_PROPS="$KAFKA_CONSOLE_CONSUMER_PROPS --bootstrap-server $BOOTSTRAP_SERVER"
+        else
+            KAFKA_CONSOLE_CONSUMER_PROPS="$KAFKA_CONSOLE_CONSUMER_PROPS --property '$FILE_PROPERTY'"
+        fi
+    done
+
+    eval "$KAFKA_CONSOLE_CONSUMER_PROPS"
+}
+
+for cgroup_name in $(./list "$SOURCE_ENVIRONMENT" | grep -E "$PATTERN"); do 
+    for cgroup_topic_name in $(./describe "$SOURCE_ENVIRONMENT" "$cgroup_name" | awk '{if(NR>2)print $2}' | sort | uniq); do 
+        create_consumer_group "$TARGET_ENVIRONMENT" "$cgroup_name" "$cgroup_topic_name"
+        ${SCRIPT_LOCATION}/reset-offsets "$TARGET_ENVIRONMENT" "$cgroup_name" "$cgroup_topic_name" 'latest'
+    done
+done

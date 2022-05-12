@@ -1,0 +1,120 @@
+#!/bin/bash
+#
+# Produce batch of messages encoded as STRING or JSON to topic on the specified kafka cluster.
+# Message key and value/body will be encoded as STRING.
+# JSON objects are not validated by producer when submitted to kafka. Be sure they are correct!
+#
+# Required Arguments:
+#   'environment'         : environment name of the specified kafka cluster.
+#   'topic'               : topic name to produce records. 
+#   'key & body'          : message key and body separated by '|-_-|' symbols.
+#
+# All configuration files must be stored in '${KFK_CLI_HOME}/etc/env' directory.
+# All configuration files must follow the following pattern name: <cluster-name>_config.properties
+# ---
+# author: valentine-riabukhin.pro
+
+SCRIPT_LOCATION="$(cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+INVALID_ARGUMENTS_ERROR_CODE=128
+
+active_logger="${KFK_CLI_HOME}/etc/logging/active-log4j.properties"
+[ -f "${active_logger}" ] && export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:${active_logger}" || unset KAFKA_LOG4J_OPTS
+
+KAFKA_CONSOLE_PRODUCER_BIN=$(compgen -ac | grep kafka-console-producer | head -n 1)
+
+usage() {
+    local exit_status="${1}"
+    [[ -z "${exit_status}" ]] && exit_status=0
+    cat <<EOF
+Usage: <pipeline_func> | kfk produce string-batch [<parameters>]
+Description:
+    Produce batch of messages encoded as STRING or JSON to topic on the specified kafka cluster.
+    Message key and value/body will be encoded as STRING.
+    JSON objects are not validated by producer when submitted to kafka. Be sure they are correct!
+    
+    All configuration files must be stored in '\${kfk}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+    
+    Required Arguments:
+      'environment'         : environment name of the specified kafka cluster.
+      'topic'               : topic name to produce messages.
+      'key & body'          : message key and body separated by '|-_-|' symbols.
+Examples:
+    echo 'string-key|string-body' | kfk produce string-batch dev dev-encoded-string-topic
+    cat batch.file | kfk produce string-batch local-dev dev-encoded-string-topic
+EOF
+    exit $exit_status
+}
+
+if [ "${1}" = 'help' ]; then usage
+elif [ -z "$1" ] || [ -z "$2" ]; then usage ${INVALID_ARGUMENTS_ERROR_CODE}; fi
+
+ENVIRONMENT="$1"
+TOPIC_NAME="$2"
+shift 2
+ENV_PROPS_LOCATION="${KFK_CLI_HOME}/etc/env/${ENVIRONMENT}_config.properties"
+
+if ! [ -f "${ENV_PROPS_LOCATION}" ]; then 
+    cat <<EOF 
+The configuration file for '${ENVIRONMENT}' environment could not be found. Make sure it exists.
+
+Help:
+    All configuration files must be stored in '\${KFK_CLI_HOME}/etc/env' directory.
+    All configuration files must follow the following pattern name: <cluster-name>_config.properties
+
+Type 'kfk produce help string-batch' to read more about 'string-batch' command.
+EOF
+    exit ${INVALID_ARGUMENTS_ERROR_CODE}
+fi
+
+BOOTSTRAP_SERVER=''
+SECURITY_PROTOCOL='SASL_PLAINTEXT'
+SASL_JAAS_USERNAME=''
+SASL_JAAS_PASSWORD=''
+
+# parse properties
+IFS=$'\n'
+for FILE_PROPERTY in $(cat ${ENV_PROPS_LOCATION} | egrep ^[a-zA-Z0-9]); do 
+    if [ "$FILE_PROPERTY" != "${FILE_PROPERTY/bootstrap.servers//}" ]; then BOOTSTRAP_SERVER="${FILE_PROPERTY#*=}"
+    elif [ "$FILE_PROPERTY" != "${FILE_PROPERTY/security.protocol//}" ]; then SECURITY_PROTOCOL="${FILE_PROPERTY#*=}"
+    elif [ "$FILE_PROPERTY" != "${FILE_PROPERTY/sasl.jaas.config//}" ]; then 
+        SASL_JAAS_CONFIG_VALUE="${FILE_PROPERTY#*=}"
+        SASL_JAAS_USERNAME_VALUE=$(echo "$SASL_JAAS_CONFIG_VALUE" | egrep -o "username=\".+\" ")
+        SASL_JAAS_PASSWORD_VALUE=$(echo "$SASL_JAAS_CONFIG_VALUE" | egrep -o "password=\".+\"")
+        SASL_JAAS_USERNAME_QUOTED="${SASL_JAAS_USERNAME_VALUE#*=}" 
+        SASL_JAAS_PASSWORD_QUOTED="${SASL_JAAS_PASSWORD_VALUE#*=}"
+        SASL_JAAS_USERNAME="${SASL_JAAS_USERNAME_QUOTED:1:${#SASL_JAAS_USERNAME_QUOTED}-3}"
+        SASL_JAAS_PASSWORD="${SASL_JAAS_PASSWORD_QUOTED:1:${#SASL_JAAS_PASSWORD_QUOTED}-2}"
+    fi
+done
+
+if [ -z "${SASL_JAAS_USERNAME}" ] || [ -z "${SASL_JAAS_PASSWORD}" ]; then
+    ${KAFKA_CONSOLE_PRODUCER_BIN} \
+        --topic "$TOPIC_NAME" \
+        --broker-list "$BOOTSTRAP_SERVER" \
+        --property "parse.key=true" \
+        --property "key.separator=|-_-|" \
+        --property 'key.serializer=org.apache.kafka.common.serialization.StringSerializer' \
+        --property 'value.serializer=org.apache.kafka.common.serialization.StringSerializer' "$@"
+else
+    ${KAFKA_CONSOLE_PRODUCER_BIN} \
+        --topic "$TOPIC_NAME" \
+        --broker-list "$BOOTSTRAP_SERVER" \
+        --property "ssl.endpoint.identification.algorithm=https" \
+        --property "sasl.mechanism=PLAIN" \
+        --property "request.timeout.ms=20000" \
+        --property "retry.backoff.ms=500" \
+        --property "sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username=\"$SASL_JAAS_USERNAME\" password=\"${SASL_JAAS_PASSWORD}\";" \
+        --property "security.protocol=${SECURITY_PROTOCOL}" \
+        --property "basic.auth.credentials.source=USER_INFO" \
+        --producer-property "ssl.endpoint.identification.algorithm=https" \
+        --producer-property "sasl.mechanism=PLAIN" \
+        --producer-property "request.timeout.ms=20000" \
+        --producer-property "retry.backoff.ms=500" \
+        --producer-property "sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username=\"$SASL_JAAS_USERNAME\" password=\"${SASL_JAAS_PASSWORD}\";" \
+        --producer-property "security.protocol=${SECURITY_PROTOCOL}" \
+        --property "parse.key=true" \
+        --property "key.separator=|-_-|" \
+        --property 'key.serializer=org.apache.kafka.common.serialization.StringSerializer' \
+        --property 'value.serializer=org.apache.kafka.common.serialization.StringSerializer' "$@"
+fi
