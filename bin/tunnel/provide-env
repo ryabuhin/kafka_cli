@@ -82,6 +82,10 @@ fi
 
 [ ! -f "${KEY_PATH}" ] && echoc "RED" "SSH key file '${KEY_PATH}' does not exist." && usage ${INVALID_ARGUMENTS_ERROR_CODE}; 
 
+if [ ! -f "${KFK_CLI_HOME}/etc/tunnel/tunnel.properties" ]; then 
+    mkdir -p "${KFK_CLI_HOME}/etc/tunnel" && touch "${KFK_CLI_HOME}/etc/tunnel/tunnel.properties"
+fi
+
 sed $sed_specific_extension_flag "/^${ENVIRONMENT}.key.path/d" "${KFK_CLI_HOME}/etc/tunnel/tunnel.properties"
 sed $sed_specific_extension_flag "/^${ENVIRONMENT}.ssh.connection/d" "${KFK_CLI_HOME}/etc/tunnel/tunnel.properties"
 echo "${ENVIRONMENT}.key.path=${KEY_PATH}" >> "${KFK_CLI_HOME}/etc/tunnel/tunnel.properties"
